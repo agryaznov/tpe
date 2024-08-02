@@ -19,149 +19,97 @@ struct Engine {
     transactions: HashMap<u32, Transaction>,
 }
 
+macro_rules! impl_transaction_handler {
+    ($action:ident) => {
+        fn $action(&mut self, mut tx: Transaction) -> Result<(), String> {
+            tx.execute();
+            match tx.state() {
+                St::Executed if !self.transactions.contains_key(&tx.id) => {
+                    let acc = &mut self.get_or_create_account(tx.client);
+                    acc.$action(tx.amount)?;
+                }
+                r @ _ => return Err(format!("deposit tx declined: {:?}", &r).to_string()),
+            }
+            // Store succeed transaction
+            self.transactions.insert(tx.id, tx);
+            Ok(())
+        }
+    };
+}
+
+macro_rules! impl_event_handler {
+    ($event:ident, $action:ident, $state:ident) => {
+        #[doc = "Handles "]
+        #[doc = stringify!($event)]
+        #[doc = " request by performing safety checks, and performing `"]
+        #[doc = stringify!($action)]
+        #[doc = "()` action on the account balance. Succeed only if the transaction in question "]
+        #[doc = "ended up at the `"]
+        #[doc = stringify!($state)]
+        #[doc = "` state."]
+        fn $event(&mut self, tx: &mut Transaction) -> Result<u64, String> {
+            // lookup for the disputed tx, and fail if not found
+            let tx = &mut self
+                .transactions
+                .get_mut(&tx.id)
+                .ok_or("disputed transaction not found".to_string())?;
+            // ensure accounts match in the dispute claim and in the original transaction,
+            // this is kinda authentication.
+            if tx.client.ne(&tx.client) {
+                return Err("dispute account is not the transaction owner".to_string());
+            }
+            let acc = &mut self
+                .accounts
+                .get_mut(&tx.client)
+                .ok_or("dispute account does not exist".to_string())?;
+
+            match tx.ty {
+                Tx::Deposit => {
+                    tx.$event();
+                    match tx.state() {
+                        St::$state => acc.$action(tx.amount),
+                        r @ _ => return Err(format!("dispute tx declined: {:?}", &r).to_string()),
+                    }
+                }
+                _ => Err("dispute on this type of transaction is not allowed".to_string()),
+            }
+        }
+    };
+}
+
 impl Engine {
     pub fn new() -> Self {
         Default::default()
     }
+
     /// Processes transaction, updating client Account.
     pub fn process(&mut self, mut tx: Transaction) -> Result<(), String> {
         match tx.ty {
             Tx::Deposit => {
-                tx.execute();
-                match tx.state() {
-                    St::Executed if !self.transactions.contains_key(&tx.id) => {
-                        let acc = &mut self.get_or_create_account(tx.client);
-                        acc.deposit(tx.amount)?;
-                    }
-                    r @ _ => return Err(format!("deposit tx declined: {:?}", &r).to_string()),
-                }
-                // Store succeed transaction
-                self.transactions.insert(tx.id, tx);
+                self.deposit(tx)?;
             }
             Tx::Withdrawal => {
-                tx.execute();
-                match tx.state() {
-                    St::Executed if !self.transactions.contains_key(&tx.id) => {
-                        let acc = &mut self.get_or_create_account(tx.client);
-                        acc.withdraw(tx.amount)?;
-                    }
-                    r @ _ => return Err(format!("withdrawal tx declined: {:?}", &r).to_string()),
-                }
-                // Store succeed transaction
-                self.transactions.insert(tx.id, tx);
+                self.withdraw(tx)?;
             }
             Tx::Dispute => {
-                self.open_dispute(&mut tx)?;
+                self.dispute(&mut tx)?;
             }
             Tx::Resolve => {
-                self.resolve_dispute(&mut tx)?;
+                self.resolve(&mut tx)?;
             }
             Tx::Chargeback => {
-                self.chargeback(&mut tx)?;
+                self.revert(&mut tx)?;
             }
         };
 
         Ok(())
     }
 
-    /// Opens a dispute on the transaction with provided ID.
-    ///
-    /// It is impossible to open a dispute if:
-    ///
-    /// - it refers to a non-existent transaction,
-    /// - client ID in the dispute and the disputed transaction don't match.
-    ///
-    /// Only transactions of the following types can be disputed:
-    ///
-    /// - Deposit: in this case the deposite amount is held;
-    /// - Withdraw: no changes happen on the account balance, we just record
-    ///             the fact of the dispute.
-    ///
-    /// Returns the amount available on the account after the dispute opened.
-    fn open_dispute(&mut self, dispute: &mut Transaction) -> Result<u64, String> {
-        // lookup for the disputed tx, and fail of not found
-        let tx = self
-            .transactions
-            .get_mut(&dispute.id)
-            .ok_or("disputed transaction not found".to_string())?;
-        // ensure accounts match in the dispute claim and in the original transaction
-        if tx.client.ne(&dispute.client) {
-            return Err("dispute account is not the transaction owner".to_string());
-        }
-        let acc = &mut self
-            .accounts
-            .get_mut(&dispute.client)
-            .ok_or("dispute account does not exist".to_string())?;
-
-        match tx.ty {
-            Tx::Deposit => {
-                tx.dispute();
-                match tx.state() {
-                    St::Disputed => acc.hold(tx.amount),
-                    r @ _ => return Err(format!("dispute tx declined: {:?}", &r).to_string()),
-                }
-            }
-            _ => Err("dispute on this type of transaction is not allowed".to_string()),
-        }
-    }
-
-    /// TODO
-    fn resolve_dispute(&mut self, resolve: &Transaction) -> Result<u64, String> {
-        // lookup for the disputed tx, and fail of not found
-        let tx = self
-            .transactions
-            .get_mut(&resolve.id)
-            .ok_or("disputed transaction not found".to_string())?;
-        // ensure accounts match in the dispute claim and in the original transaction
-        if tx.client.ne(&resolve.client) {
-            return Err("resolve account is not the transaction owner".to_string());
-        }
-        let acc = &mut self
-            .accounts
-            .get_mut(&resolve.client)
-            .ok_or("resolve account does not exist".to_string())?;
-
-        match tx.ty {
-            Tx::Deposit => {
-                tx.resolve();
-                match tx.state() {
-                    St::Executed => acc.release(tx.amount),
-                    r @ _ => return Err(format!("resolve tx declined: {:?}", &r).to_string()),
-                }
-            }
-            _ => Err("dispute/resolve on this type of transaction is not allowed".to_string()),
-        }
-    }
-
-    /// TODO
-    fn chargeback(&mut self, chargeback: &Transaction) -> Result<u64, String> {
-        // lookup for the tx to chargeback, and fail of not found
-        let tx = self
-            .transactions
-            .get_mut(&chargeback.id)
-            .ok_or("to be charged back transaction not found".to_string())?;
-        // ensure accounts match in the dispute claim and in the original transaction
-        if tx.client.ne(&chargeback.client) {
-            return Err("chargeback account is not the transaction owner".to_string());
-        }
-        let acc = &mut self
-            .accounts
-            .get_mut(&chargeback.client)
-            .ok_or("chargeback account does not exist".to_string())?;
-
-        match tx.ty {
-            Tx::Deposit => {
-                tx.revert();
-                match tx.state() {
-                    St::Reverted => acc.chargeback(tx.amount),
-                    r @ _ => return Err(format!("resolve tx declined: {:?}", &r).to_string()),
-                }
-            }
-            _ => Err(
-                "dispute/resolve/chargeback on this type of transaction is not allowed".to_string(),
-            ),
-        }
-    }
+    impl_transaction_handler!(deposit);
+    impl_transaction_handler!(withdraw);
+    impl_event_handler!(dispute, hold, Disputed);
+    impl_event_handler!(resolve, release, Executed);
+    impl_event_handler!(revert, chargeback, Reverted);
 
     fn get_or_create_account(&mut self, id: u32) -> &mut Account {
         if !&self.accounts.contains_key(&id) {
@@ -171,7 +119,7 @@ impl Engine {
     }
 }
 
-/// Helper for amounts deserialization
+/// TODO Helper for amounts deserialization
 fn deserialize_amount_as_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: Deserializer<'de>,

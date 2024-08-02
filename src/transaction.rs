@@ -1,6 +1,4 @@
-use std::any::Any;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 
 // Transaction states
 #[derive(Default, Debug)]
@@ -22,7 +20,6 @@ pub enum St {
 }
 
 /// User transaction.
-// TODO: fix it to deal woth empty amount field
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct Transaction {
     /// Transaction ID, unique, one per client.
@@ -41,6 +38,18 @@ pub struct Transaction {
     state: Option<Box<dyn TxState + 'static>>,
 }
 
+macro_rules! declare_transitions {
+    ($($transition:ident),+) => {
+            $(
+            pub fn $transition(&mut self) {
+                if let Some(s) = self.state.take() {
+                    self.state = Some(s.$transition())
+                }
+            }
+           )+
+    };
+}
+
 impl Transaction {
     pub fn init(&mut self, state: Box<dyn TxState>) {
         self.state = Some(state)
@@ -53,26 +62,8 @@ impl Transaction {
             St::Undefined
         }
     }
-    pub fn execute(&mut self) {
-        if let Some(s) = self.state.take() {
-            self.state = Some(s.execute())
-        }
-    }
-    pub fn dispute(&mut self) {
-        if let Some(s) = self.state.take() {
-            self.state = Some(s.dispute())
-        }
-    }
-    pub fn resolve(&mut self) {
-        if let Some(s) = self.state.take() {
-            self.state = Some(s.resolve())
-        }
-    }
-    pub fn revert(&mut self) {
-        if let Some(s) = self.state.take() {
-            self.state = Some(s.revert())
-        }
-    }
+
+    declare_transitions!(execute, dispute, resolve, revert);
 }
 
 pub trait TxState: std::fmt::Debug {
@@ -83,74 +74,56 @@ pub trait TxState: std::fmt::Debug {
     fn revert(self: Box<Self>) -> Box<dyn TxState>;
 }
 
+macro_rules! impl_fallbacks {
+    ($($fallback:ident),+) => {
+            $(
+            fn $fallback(self: Box<Self>) ->  Box<dyn TxState> {
+                self
+            }
+           )+
+    };
+}
+
+macro_rules! impl_state_getter {
+    ($state:ident) => {
+        fn state(&self) -> St {
+            St::$state
+        }
+    };
+}
+
 impl TxState for Received {
-    fn state(&self) -> St {
-        St::Received
-    }
     fn execute(self: Box<Self>) -> Box<dyn TxState> {
         Box::new(Executed)
     }
-    fn dispute(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
-    fn resolve(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
-    fn revert(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
+
+    impl_fallbacks!(dispute, resolve, revert);
+    impl_state_getter!(Received);
 }
 
 impl TxState for Executed {
-    fn state(&self) -> St {
-        St::Executed
-    }
-    fn execute(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
     fn dispute(self: Box<Self>) -> Box<dyn TxState> {
         Box::new(Disputed)
     }
-    fn resolve(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
-    fn revert(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
+
+    impl_fallbacks!(execute, resolve, revert);
+    impl_state_getter!(Executed);
 }
 impl TxState for Disputed {
-    fn state(&self) -> St {
-        St::Disputed
-    }
-    fn execute(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
-    fn dispute(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
     fn resolve(self: Box<Self>) -> Box<dyn TxState> {
         Box::new(Executed)
     }
+
     fn revert(self: Box<Self>) -> Box<dyn TxState> {
         Box::new(Reverted)
     }
+
+    impl_fallbacks!(execute, dispute);
+    impl_state_getter!(Disputed);
 }
 impl TxState for Reverted {
-    fn state(&self) -> St {
-        St::Reverted
-    }
-    fn execute(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
-    fn dispute(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
-    fn resolve(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
-    fn revert(self: Box<Self>) -> Box<dyn TxState> {
-        self
-    }
+    impl_fallbacks!(execute, dispute, resolve, revert);
+    impl_state_getter!(Reverted);
 }
 
 /// Types of Transactions.
