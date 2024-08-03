@@ -1,12 +1,16 @@
-/// User account
+use serde::Serializer;
+
+/// User account.
 #[derive(Default, Debug, Copy, Clone)]
 pub struct Account {
     /// Client ID, unique, one per client.
     pub id: u32,
     /// Total balance of the client account, including held funds.
     /// We store balances as integers for simpler operations,
-    /// as only precision to 10^-5 needed,
-    /// we store it as <amount>*10^5.
+    /// as only precision to 10^-4 needed,
+    /// we store it as <amount>*10^4.
+    /// This allows dealing with balances up to ~1.84 quadrillion (`u64::MAX/10^4`),
+    /// which should be quite enough.
     pub total: u64,
     /// Total funds held for dispute.
     pub held: u64,
@@ -51,7 +55,7 @@ impl Account {
         ensure_unlocked!(self);
 
         if self.available() < amount {
-            return Err(format!("insufficient available balance, acc: {:?}", &self).to_string());
+            return Err(format!("insufficient available balance, acc: {:?}", &self));
         };
 
         self.total = self
@@ -66,19 +70,19 @@ impl Account {
     pub fn hold(&mut self, amount: u64) -> Result<u64, String> {
         ensure_unlocked!(self);
 
-        // TODO: might be an attack vector?
         self.held = self.held.saturating_add(amount);
         Ok(self.available())
     }
-    /// TODO
+    /// Releases amount on the account.
+    /// Returns new available balance upon success.
     pub fn release(&mut self, amount: u64) -> Result<u64, String> {
         ensure_unlocked!(self);
 
         self.held = self.held.saturating_sub(amount);
         Ok(self.available())
     }
-    /// TODO should we check that this happens AFTER dispute?
-    /// Chargeback is possible only if a dispute has been opened for the transaction in question.
+    /// Charges an amount back.
+    /// Returns new total balance upon success.
     pub fn chargeback(&mut self, amount: u64) -> Result<u64, String> {
         ensure_unlocked!(self);
 
@@ -86,14 +90,62 @@ impl Account {
         self.held = self.held.saturating_sub(amount);
 
         self.lock();
-        Ok(self.available())
+        Ok(self.total)
     }
+    /// Locks account.
     pub fn lock(&mut self) {
         self.locked = true;
     }
-    /// TODO
+    /// Unlocks account.
     #[allow(dead_code)]
     pub fn unlock(&mut self) {
         self.locked = false;
     }
+}
+
+/// Helper struct for simpler Account serilization.
+#[derive(Debug, serde::Serialize)]
+pub struct AccountSer {
+    client: u32,
+    #[serde(serialize_with = "ser_amount")]
+    available: u64,
+    #[serde(serialize_with = "ser_amount")]
+    held: u64,
+    #[serde(serialize_with = "ser_amount")]
+    total: u64,
+    locked: bool,
+}
+
+impl From<Account> for AccountSer {
+    fn from(a: Account) -> Self {
+        AccountSer {
+            client: a.id,
+            available: a.available(),
+            held: a.held,
+            total: a.total,
+            locked: a.locked,
+        }
+    }
+}
+
+/// Helper for amounts serialization.
+fn ser_amount<S>(a: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let f = a % 10_000;
+    let s = if f > 0 {
+        let f = format!("{}", &f);
+        let mut zeros = String::new();
+        for c in std::iter::repeat('0').take(4 - f.len()) {
+            zeros.push(c)
+        }
+        format!("{}.{}{}", a / 10_000, zeros, f)
+            .trim_end_matches('0')
+            .to_owned()
+    } else {
+        format!("{}", a / 10_000)
+    };
+
+    serializer.serialize_str(&s)
 }

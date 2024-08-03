@@ -1,0 +1,20 @@
+type, client, tx, amount
+# succeed
+deposit, 3, 1, 1300.42339
+# succeed
+deposit, 2, 2, 180
+# succeed
+deposit, 2, 3, 220.0003
+# refused: already processed
+deposit, 2, 3, 220.0003
+# succeed
+withdrawal, 3, 4, 1000.0001
+# refused: already processed
+withdrawal, 3, 4, 1000.0001
+# refused: insuficcient balance
+withdrawal, 2, 5, 400.0004
+# succeed
+withdrawal, 2, 6, 400.000299
+# these 2 should result in +2 (not +3!)
+deposit, 1, 7, 0.00019
+deposit, 1, 8, 0.00019

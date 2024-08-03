@@ -1,0 +1,8 @@
+type, client, tx, amount
+deposit, 3, 1, 10000
+deposit, 3, 2, 42000
+dispute, 3, 2,
+dispute, 3, 1
+withdrawal, 3, 3, 12000
+resolve, 3, 2, 0
+withdrawal, 3, 3, 12000
