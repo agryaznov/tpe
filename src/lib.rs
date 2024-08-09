@@ -1,7 +1,12 @@
+use csv::Trim;
 use std::collections::hash_map::{HashMap, Values};
+use std::{error::Error, ffi::OsString, fs::File, io};
 
-use crate::account::*;
-use crate::transaction::*;
+mod account;
+mod transaction;
+
+pub use account::*;
+pub use transaction::*;
 
 /// Toy Payments Engine,
 /// which processes transactions and stores account states and processed transactions.
@@ -78,6 +83,37 @@ impl Engine {
         Default::default()
     }
 
+    pub fn run(&mut self, file_path: &OsString) -> Result<(), Box<dyn Error>> {
+        let file = File::open(file_path)?;
+        let mut rdr = csv::ReaderBuilder::new()
+            .trim(Trim::All)
+            .flexible(true)
+            .from_reader(file);
+        // input
+        // ignores failed to be parsed entries
+        for entry in rdr.deserialize().flatten() {
+            // load
+            let mut tx: Transaction = entry;
+            let s = Box::new(Received);
+            if tx.init(s).is_ok() {
+                // process
+                // infalible run, we ignore errors,
+                // faulty transactions are simply discarded
+                let _ = self.process(tx);
+            }
+        }
+        // output
+        let mut wtr = csv::WriterBuilder::new()
+            .has_headers(true)
+            .from_writer(io::stdout());
+        for client in self.accounts() {
+            wtr.serialize(AccountSer::from(*client))?
+        }
+        wtr.flush()?;
+
+        Ok(())
+    }
+
     /// Processes transaction, updating client Account.
     pub fn process(&mut self, mut tx: Transaction) -> Result<(), String> {
         match tx.ty {
@@ -107,12 +143,10 @@ impl Engine {
         self.accounts.values()
     }
 
-    #[cfg(test)]
     pub fn transactions(&self) -> Values<u32, Transaction> {
         self.transactions.values()
     }
 
-    #[cfg(test)]
     pub fn get_account(&self, id: &u32) -> Option<&Account> {
         self.accounts.get(id)
     }
