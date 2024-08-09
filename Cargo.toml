@@ -13,5 +13,5 @@ serde = { version = "1.0.204", features = ["serde_derive"] }
 criterion = { version = "0.4", features = ["html_reports"] }
 
 [[bench]]
-name = "basic"
+name = "million"
 harness = false

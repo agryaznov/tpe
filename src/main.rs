@@ -1,4 +1,4 @@
-use std::{env, error::Error, ffi::OsString, process};
+use std::{env, error::Error, ffi::OsString, io, process};
 
 use toy_payments_engine::Engine;
 
@@ -6,7 +6,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut engine = Engine::new();
     let file_path = get_first_arg()?;
 
-    engine.run(&file_path)
+    engine.run(&file_path, io::stdout())
 }
 
 /// Returns the first positional argument sent to this process. If there are no

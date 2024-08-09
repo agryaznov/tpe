@@ -83,7 +83,11 @@ impl Engine {
         Default::default()
     }
 
-    pub fn run(&mut self, file_path: &OsString) -> Result<(), Box<dyn Error>> {
+    pub fn run<W: io::Write>(
+        &mut self,
+        file_path: &OsString,
+        writer: W,
+    ) -> Result<(), Box<dyn Error>> {
         let file = File::open(file_path)?;
         let mut rdr = csv::ReaderBuilder::new()
             .trim(Trim::All)
@@ -105,7 +109,7 @@ impl Engine {
         // output
         let mut wtr = csv::WriterBuilder::new()
             .has_headers(true)
-            .from_writer(io::stdout());
+            .from_writer(writer);
         for client in self.accounts() {
             wtr.serialize(AccountSer::from(*client))?
         }
